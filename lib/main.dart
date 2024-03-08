@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 
 void main() {
   runApp(MyApp());
@@ -34,7 +35,8 @@ class _InputScreenState extends State<InputScreen> {
   TimeOfDay? brbOutTime;
   TimeOfDay? brbInTime;
   String endTimeString = '';
-  String remainingTimeString = '';
+  String remainingTimeString = 'Remaining time: 00:00:00';
+  Timer? _timer;
 
   @override
   void initState() {
@@ -42,13 +44,20 @@ class _InputScreenState extends State<InputScreen> {
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
   void _loadData() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     setState(() {
-      endTimeString = prefs.getString('endTimeString') ?? '';
-      remainingTimeString = prefs.getString('remainingTimeString') ?? '';
+      endTimeString = prefs.getString('endTimeString') ?? 'Ends at: 00:00:00';  
+      remainingTimeString = prefs.getString('remainingTimeString') ?? 'Remaining time: 00:00:00'; 
     });
   }
+
 
   void _selectTime(BuildContext context, String label) async {
     final useCurrentTime = await showDialog<bool>(
@@ -87,9 +96,10 @@ class _InputScreenState extends State<InputScreen> {
           case 'Start Time':
             startTime = picked;
             final now = DateTime.now();
-            final todayStartTime = DateTime(now.year, now.month, now.day, startTime!.hour, startTime!.minute);
+            final todayStartTime =
+                DateTime(now.year, now.month, now.day, startTime!.hour, startTime!.minute);
             final DateTime endTime = todayStartTime.add(const Duration(hours: 8));
-            endTimeString = 'Your work day ends at ${DateFormat('h:mm a').format(endTime)}';
+            endTimeString = 'Ends at ${DateFormat('h:mm a').format(endTime)}';
             break;
           case 'Lunch Out Time':
             lunchOutTime = picked;
@@ -119,40 +129,63 @@ class _InputScreenState extends State<InputScreen> {
       lunchInTime = null;
       brbOutTime = null;
       brbInTime = null;
-      endTimeString = '';
-      remainingTimeString = '';
+      endTimeString = 'Ends at: 00:00:00';
+      remainingTimeString = 'Remaining time: 00:00:00';
+      _timer?.cancel();
     });
   }
 
   void calculateAndDisplayWorkHours() async {
     if (startTime != null) {
       final now = DateTime.now();
-      final todayStartTime = DateTime(now.year, now.month, now.day, startTime!.hour, startTime!.minute);
+      final todayStartTime =
+          DateTime(now.year, now.month, now.day, startTime!.hour, startTime!.minute);
 
       // Calculate lunch duration
       Duration lunchDuration = Duration();
       if (lunchInTime != null && lunchOutTime != null) {
-        final todayLunchInTime = DateTime(now.year, now.month, now.day, lunchInTime!.hour, lunchInTime!.minute);
-        final todayLunchOutTime = DateTime(now.year, now.month, now.day, lunchOutTime!.hour, lunchOutTime!.minute);
+        final todayLunchInTime =
+            DateTime(now.year, now.month, now.day, lunchInTime!.hour, lunchInTime!.minute);
+        final todayLunchOutTime =
+            DateTime(now.year, now.month, now.day, lunchOutTime!.hour, lunchOutTime!.minute);
         lunchDuration = todayLunchOutTime.difference(todayLunchInTime);
       }
 
       // Calculate BRB duration
       Duration brbDuration = Duration();
       if (brbInTime != null && brbOutTime != null) {
-        final todayBrbInTime = DateTime(now.year, now.month, now.day, brbInTime!.hour, brbInTime!.minute);
-        final todayBrbOutTime = DateTime(now.year, now.month, now.day, brbOutTime!.hour, brbOutTime!.minute);
+        final todayBrbInTime =
+            DateTime(now.year, now.month, now.day, brbInTime!.hour, brbInTime!.minute);
+        final todayBrbOutTime =
+            DateTime(now.year, now.month, now.day, brbOutTime!.hour, brbOutTime!.minute);
         brbDuration = todayBrbOutTime.difference(todayBrbInTime);
       }
 
       // Calculate end time by adding 8 hours to the start time and subtracting lunch and BRB durations
-      final DateTime endTime = todayStartTime.add(const Duration(hours: 8)).subtract(lunchDuration).subtract(brbDuration);
+      final DateTime endTime = todayStartTime
+          .add(const Duration(hours: 8))
+          .subtract(lunchDuration)
+          .subtract(brbDuration);
 
-      // Calculate remaining hours by subtracting current time from end time
-      final Duration remainingDuration = endTime.difference(now);
+      // Cancel the previous timer if it exists
+      _timer?.cancel();
 
-      setState(() {
-        remainingTimeString = 'Remaining Hours: ${remainingDuration.inHours}:${remainingDuration.inMinutes.remainder(60).toString().padLeft(2, '0')}';
+      // Start a new timer that updates the remaining time every second
+      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        final Duration remainingDuration = endTime.difference(DateTime.now());
+        String hours = '${remainingDuration.inHours}';
+        String minutes = '${remainingDuration.inMinutes.remainder(60)}'.padLeft(2, '0');
+        String seconds = '${remainingDuration.inSeconds.remainder(60)}'.padLeft(2, '0');
+
+        setState(() {
+          remainingTimeString = 'Remaining Time: $hours:$minutes:$seconds';
+        });
+
+        // Stop the timer when the remaining time is zero or negative
+        if (remainingDuration.isNegative) {
+          timer.cancel();
+          remainingTimeString = 'Time\'s up!';
+        }
       });
 
       SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -170,6 +203,7 @@ class _InputScreenState extends State<InputScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (endTimeString.isNotEmpty)
+            const SizedBox(height: 70.0),
               Text(
                 endTimeString,
                 style: Theme.of(context).textTheme.headline5?.copyWith(
@@ -186,19 +220,20 @@ class _InputScreenState extends State<InputScreen> {
                   ),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 20.0),
-            Center(child: buildButton('Start Time', startTime, width: 200, icon: Icons.timer)),
+            const SizedBox(height: 50.0),
+            Center(child: buildButton('Start Time', startTime, width: 250, icon: Icons.timer)),
             const SizedBox(height: 10.0),
-            Center(child: buildButton('Lunch Out Time', lunchOutTime, width: 200, icon: Icons.restaurant)),
+            Center(child: buildButton('Lunch Out Time', lunchOutTime, width: 250, icon: Icons.restaurant)),
             const SizedBox(height: 10.0),
-            Center(child: buildButton('Lunch In Time', lunchInTime, width: 200, icon: Icons.restaurant_menu)),
+            Center(child: buildButton('Lunch In Time', lunchInTime, width: 250, icon: Icons.restaurant_menu)),
             const SizedBox(height: 10.0),
-            Center(child: buildButton('BRB Out Time', brbOutTime, width: 200, icon: Icons.pause_circle_outline)),
+            Center(child: buildButton('BRB Out Time', brbOutTime, width: 250, icon: Icons.pause_circle_outline)),
             const SizedBox(height: 10.0),
-            Center(child: buildButton('BRB In Time', brbInTime, width: 200, icon: Icons.play_circle_outline)),
+            Center(child: buildButton('BRB In Time', brbInTime, width: 250, icon: Icons.play_circle_outline)),
             const SizedBox(height: 70.0), // Added extra space before the "Reset All" button
             Center(
-              child: ElevatedButton(onPressed: _resetAll,
+              child: ElevatedButton(
+                onPressed: _resetAll,
                 child: const Text('Reset All'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red,
@@ -213,7 +248,8 @@ class _InputScreenState extends State<InputScreen> {
     );
   }
 
-  Widget buildButton(String label, TimeOfDay? time, {double width = 300.0, IconData icon = Icons.access_time}) {
+  Widget buildButton(String label, TimeOfDay? time,
+      {double width = 300.0, IconData icon = Icons.access_time}) {
     return ElevatedButton.icon(
       onPressed: () => _selectTime(context, label),
       icon: Icon(icon, color: Colors.white),
